@@ -1,0 +1,674 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: EKS cluster using a VPC with two public subnets and RDS , MSK ,S3 bucket and policy, elastic cache 
+
+Parameters:
+
+######################  EKS Parameter ###############################################
+  NodeAutoScalingGroupMinSize:
+    Type: Number
+    Description: Minimum size of Node Group ASG.
+    Default: 1
+
+  NodeAutoScalingGroupMaxSize:
+    Type: Number
+    Description: Maximum size of Node Group ASG. Set to at least 1 greater than NodeAutoScalingGroupDesiredCapacity.
+    #Default: 4
+
+  NodeAutoScalingGroupDesiredCapacity:
+    Type: Number
+    Description: Desired capacity of Node Group ASG.
+    #Default: 3
+    
+  WorkerNodesInstanceType:
+    Type: String
+    Description: EC2 instance type for the worker nodes
+    #Default: t2.small
+
+  KeyPairName:
+    Type: String
+    Description: Name of an existing EC2 key pair (for SSH-access to the worker node instances)
+    #Default: test1
+
+  EksAmiIds:
+    Type: String
+    Description: Ami ids for nodes
+    #Default: ami-052f10f1c45aa2155  
+
+####################### VPC parameter###########################################
+  myVPCcidr:   #later change to vpccidrrange
+    Type: String
+    Description: CIDR range for vpc
+    #Default: 10.0.0.0/16 
+
+  mySubnet1cidr:
+    Type: String
+    Description: subnet ip address range
+    #Default: 10.0.0.0/18
+
+  mySubnet2cidr:
+    Type: String
+    Description: subnet ip address range
+    #Default: 10.0.64.0/18 
+
+####################  S3 bucket parameter ####################################
+  # Bucketname:
+  #   Description: Please enter the Bucket name
+  #   Type: String
+  #   #Default: eks-paris-new-bucket123 
+
+################  MSK parameter   ############################################
+  kafkaVersion:
+    Type: String
+    Description: kafka version
+    #Default: 2.6.1 
+
+  numberOfBrokerNodes: 
+    Type: String
+    Description: kafka no of brokers
+    #Default: 2
+
+  instanceType:
+    Type: String
+    Description: instance type
+    #Default: kafka.t3.small
+
+###################  RDS parameter  #############################################
+  Engine:
+    Type: String
+    Description: Engine type
+    #Default: aurora                    
+  
+  DatabaseUsername:
+    Type: String
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: must be between 1 to 16 alphanumeric characters.
+    Description: The database admin account user name, between 1 to 16 alphanumeric characters.
+    MaxLength: '16'
+    MinLength: '1'
+    #Default: usermain                                      
+  
+  DatabasePassword:
+    AllowedPattern: "[a-zA-Z0-9]+"
+    ConstraintDescription: must be between 8 to 41 alphanumeric characters.
+    Description: The database admin account password, between 8 to 41 alphanumeric characters.
+    MaxLength: '41'
+    MinLength: '8'
+    NoEcho: 'true'
+    Type: String
+    #Default: testinga   
+
+  BackupRetentionPeriod:  
+    Type: Number
+    Description: enter retention period
+    #Default: 7   
+
+  RDSInstanceType: 
+    Type: String
+    Description: rds instance type
+    #Default: db.r4.large                              
+                                                    
+
+#################### VPC ID for elastic cache    ###############################
+  # VpcId:
+  #   Description: The ID of the VPC for security group
+  #   Type: String
+  #   #Default: vpc-a9c5a4c0 #vpc-9a7813f3
+
+  cacheNodeType:
+    Type: String
+    #Default: cache.t2.micro 
+
+  numCacheNodes:
+    Type: Number
+    #Default: 3
+
+  elasticcacheEngine:
+    Type: String
+    #Default: redis
+
+  elasticcacheEngineVersion:
+    Type: String
+    #Default: "6.x"
+
+  numCacheClusters:
+    Type: Number
+    #Default: 2
+                                    
+Resources:
+
+  #============================================================================#
+  # VPC
+  #============================================================================#
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref myVPCcidr  
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+
+  Subnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref mySubnet1cidr 
+      MapPublicIpOnLaunch: true  
+      AvailabilityZone: !Select
+        - 0
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Subnet1"
+
+  Subnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref mySubnet2cidr  
+      MapPublicIpOnLaunch: true  
+      AvailabilityZone: !Select
+        - 1
+        - !GetAZs ""
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-Subnet2"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref AWS::StackName
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-PublicSubnets"
+
+  InternetGatewayRoute:
+    Type: AWS::EC2::Route
+    # DependsOn is mandatory because route targets InternetGateway
+    # See here: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-attribute-dependson.html#gatewayattachment
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  Subnet1RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet1
+      RouteTableId: !Ref RouteTable
+
+  Subnet2RouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref Subnet2
+      RouteTableId: !Ref RouteTable
+
+  #============================================================================#
+  # Control plane
+  #============================================================================#
+
+  ControlPlane:
+    Type: AWS::EKS::Cluster
+    Properties:
+      Name: !Ref AWS::StackName
+      Version: "1.22"
+      RoleArn: !GetAtt ControlPlaneRole.Arn
+      ResourcesVpcConfig:
+        SecurityGroupIds:
+          - !Ref ControlPlaneSecurityGroup
+        SubnetIds:
+          - !Ref Subnet1
+          - !Ref Subnet2
+
+  ControlPlaneRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+            Effect: Allow
+            Principal:
+              Service:
+                - eks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns: 
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+        - arn:aws:iam::aws:policy/AmazonEKSServicePolicy
+
+  #============================================================================#
+  # Control plane security group
+  #============================================================================#
+
+  ControlPlaneSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for the elastic network interfaces between the control plane and the worker nodes
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-ControlPlaneSecurityGroup"
+      
+
+  ControlPlaneIngressFromWorkerNodesHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming HTTPS traffic (TCP/80) from worker nodes (for API server)
+      GroupId: !Ref ControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      ToPort: 80
+      FromPort: 80
+
+  ControlPlaneIngressFromWorkerNodesHttps1:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming HTTPS traffic (TCP/20) from worker nodes (for API server)
+      GroupId: !Ref ControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      ToPort: 20
+      FromPort: 20
+
+  ControlPlaneIngressFromWorkerNodesHttps2:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming HTTPS traffic (TCP/22) from worker nodes (for API server)
+      GroupId: !Ref ControlPlaneSecurityGroup
+      SourceSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      ToPort: 22
+      FromPort: 22
+
+  ControlPlaneEgressToWorkerNodesKubelet:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow outgoing kubelet traffic (TCP/10250) to worker nodes
+      GroupId: !Ref ControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 10250
+      ToPort: 10250
+
+  ControlPlaneEgressToWorkerNodesHttps:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      Description: Allow outgoing HTTPS traffic (TCP/80) to worker nodes (for pods running extension API servers)
+      GroupId: !Ref ControlPlaneSecurityGroup
+      DestinationSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+  #============================================================================#
+  # Worker nodes group
+  #============================================================================#
+  MyNodeGroup:
+    Type: AWS::EKS::Nodegroup
+    Properties:
+      ClusterName: !Ref AWS::StackName 
+      NodeRole: !GetAtt WorkerNodesRole.Arn 
+      #IamInstanceProfile: !Ref WorkerNodesInstanceProfile
+      ScalingConfig:
+        DesiredSize: !Ref NodeAutoScalingGroupDesiredCapacity  
+        MaxSize: !Ref NodeAutoScalingGroupMaxSize 
+        MinSize: !Ref NodeAutoScalingGroupMinSize 
+      Subnets:
+        - !Ref Subnet1 
+        - !Ref Subnet2 
+      InstanceTypes: 
+        - !Ref WorkerNodesInstanceType
+      Labels:
+        key: value
+
+    DependsOn: ControlPlane    
+  #============================================================================#
+  # Worker nodes security group
+  # Note: default egress rule (allow all traffic to all destinations) applies
+  #============================================================================#
+
+  WorkerNodesSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for all the worker nodes
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WorkerNodesSecurityGroup"
+        - Key: !Sub "kubernetes.io/cluster/${ControlPlane}"
+          Value: "owned"
+
+  WorkerNodesIngressFromWorkerNodes:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow all incoming traffic from other worker nodes
+      GroupId: !Ref WorkerNodesSecurityGroup
+      SourceSecurityGroupId: !Ref WorkerNodesSecurityGroup
+      IpProtocol: "-1"
+
+  WorkerNodesIngressFromControlPlaneKubelet:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming kubelet traffic (TCP/10250) from control plane 
+      GroupId: !Ref WorkerNodesSecurityGroup
+      SourceSecurityGroupId: !Ref ControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 10250
+      ToPort: 10250
+
+  WorkerNodesIngressFromControlPlaneHttps:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Allow incoming HTTPS traffic (TCP/443) from control plane (for pods running extension API servers)
+      GroupId: !Ref WorkerNodesSecurityGroup
+      SourceSecurityGroupId: !Ref ControlPlaneSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+
+  #============================================================================#
+  # Worker nodes (auto-scaling group)
+  #============================================================================#
+
+  WorkerNodesAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        MaxBatchSize: 1
+    Properties:
+      LaunchConfigurationName: !Ref WorkerNodesLaunchConfiguration
+      DesiredCapacity: !Ref NodeAutoScalingGroupDesiredCapacity
+      MinSize: !Ref NodeAutoScalingGroupMinSize 
+      MaxSize: !Ref NodeAutoScalingGroupMaxSize 
+      VPCZoneIdentifier:
+        - !Ref Subnet1
+        - !Ref Subnet2
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-WorkerNodesAutoScalingGroup"
+          PropagateAtLaunch: true
+        # Without this tag, worker nodes are unable to join the cluster:
+        - Key: !Sub "kubernetes.io/cluster/${ControlPlane}"
+          Value: "owned"
+          PropagateAtLaunch: true
+
+  WorkerNodesLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    # Wait until cluster is ready before launching worker nodes
+    DependsOn: ControlPlane
+    Properties:
+      AssociatePublicIpAddress: true
+      IamInstanceProfile: !Ref WorkerNodesInstanceProfile
+      ImageId: !Ref EksAmiIds   
+      InstanceType: !Ref WorkerNodesInstanceType
+      KeyName: !Ref KeyPairName
+      SecurityGroups:
+        - !Ref WorkerNodesSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash
+            set -o xtrace
+            /etc/eks/bootstrap.sh ${ControlPlane}
+            /opt/aws/bin/cfn-signal \
+                            --exit-code $? \
+                            --stack  ${AWS::StackName} \
+                            --resource NodeGroup  \
+                            --region ${AWS::Region}
+
+  WorkerNodesInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref WorkerNodesRole
+
+  WorkerNodesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          Effect: Allow
+          Principal:
+            Service:
+              - ec2.amazonaws.com
+          Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+        - arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonEKSClusterPolicy   
+        - arn:aws:iam::aws:policy/AdministratorAccess    
+        - arn:aws:iam::aws:policy/AmazonCloudWatchEvidentlyFullAccess  
+
+  #============================================================================#
+  # S3 bucket and s3 policy
+  #============================================================================#
+  # S3Bucket:
+  #   Type: 'AWS::S3::Bucket'
+  #   DeletionPolicy: Retain
+  #   Properties:
+  #     BucketName: !Ref Bucketname
+
+  # SampleBucketPolicy:
+  #   Type: AWS::S3::BucketPolicy
+  #   Properties:
+  #     Bucket: !Ref S3Bucket #s3-test-BUCKET
+  #     PolicyDocument:
+  #       Version: 2012-10-17
+  #       Statement:
+  #         - Action:
+  #             - 's3:GetObject'
+  #           Effect: Allow
+  #           Resource: !Join
+  #             - ''
+  #             - - 'arn:aws:s3:::'
+  #               - !Ref S3Bucket #s3-test-BUCKET
+  #               - /*
+  #           Principal: '*'
+  #           Condition:
+  #             StringLike:
+  #               'aws:Referer':
+  #                 - 'http://www.example.com/*'
+  #                 - 'http://example.net/*'
+      
+  #============================================================================#
+  # MSK creation
+  #============================================================================#
+  MSKSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "Security group attached to MSK broker instances"
+      GroupName: "msk-sg-parist"
+      VpcId: !GetAtt VPC.VpcId 
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 9096
+        ToPort: 9096
+        CidrIp: 0.0.0.0/0
+        Description: "communicate with brokers by using SASL/SCRAM"
+      - IpProtocol: tcp
+        FromPort: 2181
+        ToPort: 2181
+        CidrIp: 0.0.0.0/0
+        Description: "communicate with Apache ZooKeeper by using default port"
+        
+  MSKCluster:
+    Type: 'AWS::MSK::Cluster'
+    Properties:
+      ClusterName: !Ref AWS::StackName 
+      KafkaVersion:  !Ref kafkaVersion 
+      NumberOfBrokerNodes: !Ref numberOfBrokerNodes 
+      BrokerNodeGroupInfo:
+        InstanceType: !Ref instanceType 
+        ClientSubnets:
+          - !GetAtt Subnet1.SubnetId 
+          - !GetAtt Subnet2.SubnetId 
+        SecurityGroups:
+          - !Ref MSKSecurityGroup
+      ClientAuthentication:
+        Sasl:
+          Scram:
+            Enabled: true
+
+  #============================================================================#
+  # RDS creation
+  #============================================================================#
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for all the worker nodes
+      VpcId: !Ref VPC
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: CloudFormation managed DB subnet group.
+      SubnetIds: 
+        - !GetAtt Subnet1.SubnetId 
+        - !GetAtt Subnet2.SubnetId 
+
+  DatabaseCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      Engine: aurora
+      MasterUsername: !Ref "DatabaseUsername"
+      MasterUserPassword: !Ref "DatabasePassword"
+      BackupRetentionPeriod: !Ref BackupRetentionPeriod 
+      PreferredBackupWindow: 01:00-02:00
+      PreferredMaintenanceWindow: mon:03:00-mon:04:00
+      DBSubnetGroupName: !Ref "DatabaseSubnetGroup"
+      VpcSecurityGroupIds: 
+        - !Ref RDSSecurityGroup  
+
+  DatabasePrimaryInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: !Ref Engine  
+      DBClusterIdentifier: !Ref "DatabaseCluster"
+      DBInstanceClass: !Ref RDSInstanceType 
+      DBSubnetGroupName: !Ref "DatabaseSubnetGroup"
+
+  DatabaseReplicaInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: !Ref Engine 
+      DBClusterIdentifier: !Ref "DatabaseCluster"
+      DBInstanceClass: !Ref RDSInstanceType 
+      DBSubnetGroupName: !Ref "DatabaseSubnetGroup"
+
+  #============================================================================#
+  # Elastic cache creation
+  #============================================================================#
+  
+  Securitygrp:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: A Security Group for Demo-EC2
+      VpcId: !GetAtt VPC.VpcId #!Ref VpcId  #!Ref VPC  refere default vpcid need to change with created vpc by cloudformation
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+    DependsOn: VPC
+
+  ElasticSubnetGroup:
+    Type: "AWS::ElastiCache::SubnetGroup"
+    Properties: 
+      CacheSubnetGroupName: "my-subnet-group"
+      Description: "My subnet group for elastic cache"
+      SubnetIds:
+          - !Ref Subnet1
+          - !Ref Subnet2   
+        
+  ElasticacheCluster:
+    Type: 'AWS::ElastiCache::CacheCluster'
+    Properties:    
+      #AZMode: single-az #cross-az       #change  sol= AZModeSpecifies whether the nodes in this Memcached cluster are created in a single Availability Zone or created across multiple Availability Zones in the cluster's region.This parameter is only supported for Memcached clusters
+      #Engine: memcached
+      Engine: !Ref elasticcacheEngine #"redis"
+      EngineVersion: !Ref elasticcacheEngineVersion #"6.x"
+      CacheNodeType: !Ref cacheNodeType #cache.t2.micro  #can make them parameterized
+      NumCacheNodes: !Ref numCacheNodes #'3'
+      CacheSubnetGroupName: !Ref ElasticSubnetGroup 
+      VpcSecurityGroupIds:
+      - !GetAtt 
+        - Securitygrp
+        - GroupId    
+
+    DependsOn: Securitygrp
+
+  elasticcacheReplicationGroup:
+    Type: 'AWS::ElastiCache::ReplicationGroup'
+    Properties:
+      ReplicationGroupDescription: primary and replica creation
+      NumCacheClusters: !Ref numCacheClusters #'2'
+      Engine: !Ref elasticcacheEngine #redis              if we want primary and replica then use ReplicationGroup 
+      CacheNodeType: !Ref cacheNodeType #cache.m3.medium    
+      AutomaticFailoverEnabled: 'true'
+      CacheSubnetGroupName: !Ref ElasticSubnetGroup #subnetgroup
+      EngineVersion: !Ref elasticcacheEngineVersion #2.8.6
+      PreferredMaintenanceWindow: 'wed:09:25-wed:22:30'
+      SnapshotRetentionLimit: '4'
+      SnapshotWindow: '03:30-05:30'
+    DependsOn: Securitygrp
+
+   
+  
+ 
+Outputs:
+
+  WorkerNodesRoleArn:
+    Description: ARN of the worker nodes role
+    Value: !GetAtt WorkerNodesRole.Arn
+  
+  MSKClusterArn:
+    Description: ARN of created MSK cluster
+    Value: !Ref MSKCluster
+ 
+  MSKSecurityGroup:
+    Description: Security group for clients to connect to the cluster
+    Value: !Ref MSKSecurityGroup
+
+  Primaryelasticcacheendpoints:
+    Description: endpoints of primary 
+    Value: !Join 
+      - ''
+      - - 'redis://'
+        - !GetAtt 
+          - elasticcacheReplicationGroup
+          - PrimaryEndPoint.Address
+        - ':'
+        - !GetAtt 
+          - elasticcacheReplicationGroup
+          - PrimaryEndPoint.Port
+
+  Replicaelasticcacheendpoints:
+    Description: endpoints of replica
+    Value: !Join 
+      - ''
+      - - 'redis://'
+        - !GetAtt 
+          - elasticcacheReplicationGroup
+          - ReaderEndPoint.Address
+        - ':'
+        - !GetAtt 
+          - elasticcacheReplicationGroup
+          - ReaderEndPoint.Port
+  
+  

@@ -1,0 +1,36 @@
+[
+    
+    {    "ParameterKey": "WorkerNodesInstanceType",    "ParameterValue": "t2.small"  },
+    {    "ParameterKey": "KeyPairName",    "ParameterValue": "test1"  },
+    {    "ParameterKey": "NodeAutoScalingGroupDesiredCapacity",    "ParameterValue": "4"  },
+    {    "ParameterKey": "NodeAutoScalingGroupMaxSize",    "ParameterValue": "5"  },
+    {    "ParameterKey": "NodeAutoScalingGroupMinSize",    "ParameterValue": "2"  },
+    {    "ParameterKey": "EksAmiIds",    "ParameterValue": "ami-052f10f1c45aa2155 "  },
+    
+    {    "ParameterKey": "myVPCcidr",    "ParameterValue": "10.0.0.0/16"  },
+    {    "ParameterKey": "mySubnet1cidr",    "ParameterValue": "10.0.0.0/18"  },
+    {    "ParameterKey": "mySubnet2cidr",    "ParameterValue": "10.0.64.0/18"  },
+    
+    
+    {    "ParameterKey": "kafkaVersion",    "ParameterValue": "2.6.1"  },
+    {    "ParameterKey": "numberOfBrokerNodes",    "ParameterValue": "2"  },
+    {    "ParameterKey": "instanceType",    "ParameterValue": "kafka.t3.small"  },
+    
+    {    "ParameterKey": "Engine",    "ParameterValue": "aurora"  },
+    {    "ParameterKey": "DatabaseUsername",    "ParameterValue": "usermain"  },
+    {    "ParameterKey": "DatabasePassword",    "ParameterValue": "testinga"  },
+    {    "ParameterKey": "BackupRetentionPeriod",    "ParameterValue": "7"  },
+    {    "ParameterKey": "RDSInstanceType",    "ParameterValue": "db.r4.large "  },
+    
+    {    "ParameterKey": "cacheNodeType",    "ParameterValue": "cache.t2.micro"  },
+    {    "ParameterKey": "numCacheNodes",    "ParameterValue": "1"  },
+    {    "ParameterKey": "elasticcacheEngine",    "ParameterValue": "redis"  },
+    {    "ParameterKey": "elasticcacheEngineVersion",    "ParameterValue": "6.x"  },
+    {    "ParameterKey": "numCacheClusters",    "ParameterValue": "2"  }
+    
+    
+    
+    ]
+    
+    
+    
